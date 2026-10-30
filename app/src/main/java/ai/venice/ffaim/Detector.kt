@@ -2,11 +2,14 @@ package ai.venice.ffaim
 
 import android.graphics.Bitmap
 import android.graphics.Rect
-import java.util.Arrays
 
 /**
- * Pure geometric outline detector. Everything is threshold driven and every
- * threshold comes from the trained model. No clothing, skin or helmet colour.
+ * Two-path outline detector.
+ *  Path A: vivid hollow head ring not under the crosshair -> ring centre is the head.
+ *  Path B: thin body silhouette -> head as a fraction of box height, refined later
+ *          by the reticle. Fraction follows AimBuddy's measured curve: 10% of the
+ *          box height for a head-to-feet figure, 30% as the box squares up.
+ * Self rejection is by solidity, never by size.
  */
 class Detector {
 
@@ -32,23 +35,39 @@ class Detector {
     private var h = 0
     private var ox = 0
     private var oy = 0
+    private var sc = 1.5f
+    private var cropArea = 1
+    private var ccx = 0
+    private var ccy = 0
 
-    fun detect(bmp: Bitmap, originHalfX: Int, originHalfY: Int) {
+    @Volatile var reticleRed = false
+        private set
+
+    fun detect(
+        bmp: Bitmap, originHalfX: Int, originHalfY: Int, scale: Float,
+        crossX: Float, crossY: Float
+    ) {
         count = 0
         w = bmp.width
         h = bmp.height
         ox = originHalfX
         oy = originHalfY
+        sc = scale
+        ccx = ((crossX / sc) - ox).toInt()
+        ccy = ((crossY / sc) - oy).toInt()
         val n = w * h
         if (n <= 0) return
+        cropArea = n
         if (px.size < n) px = IntArray(n)
         if (mask.size < n) mask = ByteArray(n)
         if (stack.size < n) stack = IntArray(n)
         bmp.getPixels(px, 0, w, 0, 0, w, h)
         buildMask(n)
         label(n)
+        sampleReticle()
     }
 
+    /** Dull-to-vivid red only. Wood (r-g~40) and sand (r-g~10) stay out. */
     private fun buildMask(n: Int) {
         val m = model
         val msk = mask
@@ -60,6 +79,23 @@ class Detector {
             val b = c and 0xFF
             msk[i] = if (r >= m.minR && r - g >= m.redOverGreen && r - b >= m.redOverBlue) 1 else 0
         }
+    }
+
+    /** Red on the crosshair means the reticle is live, i.e. the aim is on the enemy. */
+    private fun sampleReticle() {
+        var c = 0
+        var y = (ccy - 12).coerceAtLeast(0)
+        val yEnd = (ccy + 12).coerceAtMost(h - 1)
+        while (y <= yEnd) {
+            var x = (ccx - 12).coerceAtLeast(0)
+            val xEnd = (ccx + 12).coerceAtMost(w - 1)
+            while (x <= xEnd) {
+                if (mask[y * w + x].toInt() != 0) c++
+                x++
+            }
+            y++
+        }
+        reticleRed = c >= 8
     }
 
     private fun label(n: Int) {
@@ -109,14 +145,34 @@ class Detector {
     ) {
         val bw = maxX - minX + 1
         val bh = maxY - minY + 1
-        if (bw < 3 || bh < 5) return
-        val m = model
-        if (bh < m.minHeight) return
-        val aspect = bh.toFloat() / bw
-        if (aspect < m.minAspect) return
-        val fill = area.toFloat() / (bw * bh)
-        if (fill > m.maxFill) return
+        if (bw < 4 || bh < 4) return
+        if (area > cropArea * 0.42f) return
         if (minX <= 0 || minY <= 0 || maxX >= w - 1 || maxY >= h - 1) return
+
+        val aspect = bh.toFloat() / bw
+        val fill = area.toFloat() / (bw * bh)
+        val m = model
+
+        // reticle ring sitting on the crosshair: not an enemy, do not derive a head from it
+        if (ccx in minX..maxX && ccy in minY..maxY && bw <= 42 && bh <= 42 &&
+            aspect in 0.55f..1.85f && fill <= 0.50f
+        ) return
+
+        // ---- path A: head ring away from the crosshair --------------------
+        if (bw in 7..150 && bh in 7..150 && aspect in 0.52f..1.95f && fill <= 0.46f &&
+            isHollowRing(minX, maxX, minY, maxY)
+        ) {
+            if (!isTeammate(minX, maxX, minY, maxY)) {
+                emit(minX, maxX, minY, maxY, area, sr, sg, sb, mr,
+                    (minX + maxX) * 0.5f, (minY + maxY) * 0.5f, 0f, aspect, fill)
+            }
+            return
+        }
+
+        // ---- path B: body silhouette -------------------------------------
+        if (bh < m.minHeight) return
+        if (aspect < m.minAspect) return
+        if (fill > m.maxFill) return
 
         var gapRows = 0
         var rows = 0
@@ -135,75 +191,75 @@ class Detector {
         val gapRatio = if (rows == 0) 1f else gapRows.toFloat() / rows
         if (gapRatio > m.maxGapRatio) return
 
-        val sCx = (ox + (minX + maxX) * 0.5f) * 2f
-        val sCy = (oy + (minY + maxY) * 0.5f) * 2f
-        val sH = bh * 2f
-
-        if (zone.width() > 0 && zone.contains(sCx.toInt(), sCy.toInt()) && sH > Geometry.screenH * 0.18f) return
-
+        if (isSelf(minX, maxX, minY, maxY, fill)) return
         if (isTeammate(minX, maxX, minY, maxY)) return
 
-        var headX: Float
-        var headY: Float
-        val circular = bh <= bw * 1.8f && bh <= 30
-        if (circular) {
-            headX = (minX + maxX) * 0.5f
-            headY = (minY + maxY) * 0.5f
-        } else {
-            var r0 = minY
-            while (r0 <= maxY) {
-                var any = false
-                var x = minX
-                while (x <= maxX) {
-                    if (mask[r0 * w + x].toInt() != 0) { any = true; break }
-                    x++
-                }
-                if (any) break
-                r0++
-            }
-            val band = maxOf(3, (bh * m.headBand).toInt())
-            var sumX = 0L
-            var cnt = 0
-            val y2 = minOf(maxY, r0 + band)
-            var yy = r0
-            while (yy <= y2) {
-                var x = minX
-                while (x <= maxX) {
-                    if (mask[yy * w + x].toInt() != 0) { sumX += x; cnt++ }
-                    x++
-                }
-                yy++
-            }
-            headX = if (cnt > 0) sumX.toFloat() / cnt else (minX + maxX) * 0.5f
-            headY = r0 + band * m.headBias
-            if (headX < minX + 1) headX = (minX + 1).toFloat()
-            if (headX > maxX - 1) headX = (maxX - 1).toFloat()
-            if (headY > maxY.toFloat()) headY = maxY.toFloat()
-        }
+        val pad = (bw * 0.20f).toInt()
+        val xLo = (minX + pad).coerceAtMost(maxX)
+        val xHi = (maxX - pad).coerceAtLeast(minX)
+        val headX = ((xLo + xHi) * 0.5f).coerceIn(minX + 1f, maxX - 1f)
+        val f = 0.10f + 0.20f * (((1.8f - aspect) / 0.8f).coerceIn(0f, 1f))
+        val headY = (minY + bh * f).coerceAtMost(maxY.toFloat())
 
-        val d = obtain()
-        d.left = (ox + minX) * 2f
-        d.top = (oy + minY) * 2f
-        d.right = (ox + maxX) * 2f
-        d.bottom = (oy + maxY) * 2f
-        d.centreX = sCx
-        d.centreY = sCy
-        d.headX = (ox + headX) * 2f
-        d.headY = (oy + headY) * 2f
-        d.area = area
-        d.sumR = sr
-        d.sumG = sg
-        d.sumB = sb
-        d.minR = mr
-        d.gapRatio = gapRatio
-        d.fill = fill
-        d.aspect = aspect
-        d.height = sH
+        emit(minX, maxX, minY, maxY, area, sr, sg, sb, mr, headX, headY, gapRatio, aspect, fill)
+    }
+
+    private fun isSelf(minX: Int, maxX: Int, minY: Int, maxY: Int, fill: Float): Boolean {
+        if (zone.width() <= 0) return false
+        if (fill < 0.32f) return false
+        val sCx = (ox + (minX + maxX) * 0.5f) * sc
+        val sCy = (oy + (minY + maxY) * 0.5f) * sc
+        val sH = (maxY - minY + 1) * sc
+        if (sH < Geometry.screenH * 0.08f) return false
+        return zone.contains(sCx.toInt(), sCy.toInt())
+    }
+
+    private fun isHollowRing(minX: Int, maxX: Int, minY: Int, maxY: Int): Boolean {
+        val bw = maxX - minX + 1
+        val bh = maxY - minY + 1
+        val cx = (minX + maxX) / 2
+        val cy = (minY + maxY) / 2
+        val hw = maxOf(1, (bw * 0.16f).toInt())
+        val hh = maxOf(1, (bh * 0.16f).toInt())
+        var cIn = 0
+        var cTot = 0
+        var y = (cy - hh).coerceAtLeast(minY)
+        while (y <= (cy + hh).coerceAtMost(maxY)) {
+            var x = (cx - hw).coerceAtLeast(minX)
+            while (x <= (cx + hw).coerceAtMost(maxX)) {
+                cTot++
+                if (mask[y * w + x].toInt() != 0) cIn++
+                x++
+            }
+            y++
+        }
+        if (cTot == 0) return false
+        if (cIn.toFloat() / cTot > 0.30f) return false
+
+        val t = maxOf(2, (minOf(bw, bh) * 0.26f).toInt())
+        var bIn = 0
+        var bTot = 0
+        y = minY
+        while (y <= maxY) {
+            var x = minX
+            while (x <= maxX) {
+                val dx = minOf(x - minX, maxX - x)
+                val dy = minOf(y - minY, maxY - y)
+                if (dx < t || dy < t) {
+                    bTot++
+                    if (mask[y * w + x].toInt() != 0) bIn++
+                }
+                x++
+            }
+            y++
+        }
+        if (bTot == 0) return false
+        return bIn.toFloat() / bTot >= 0.42f
     }
 
     private fun isTeammate(minX: Int, maxX: Int, minY: Int, maxY: Int): Boolean {
         val bh = maxY - minY + 1
-        val bandTop = minY - maxOf(6, (bh * 0.45f).toInt())
+        val bandTop = minY - maxOf(6, (bh * 0.55f).toInt())
         if (bandTop < 1) return false
         val x0 = maxOf(1, minX - (maxX - minX) / 2)
         val x1 = minOf(w - 2, maxX + (maxX - minX) / 2)
@@ -227,15 +283,36 @@ class Detector {
             y++
         }
         if (green >= 6) return true
-        return bright >= 22
+        return bright >= 26
+    }
+
+    private fun emit(
+        minX: Int, maxX: Int, minY: Int, maxY: Int,
+        area: Int, sr: Long, sg: Long, sb: Long, mr: Int,
+        headX: Float, headY: Float, gapRatio: Float, aspect: Float, fill: Float
+    ) {
+        val d = obtain()
+        d.left = (ox + minX) * sc
+        d.top = (oy + minY) * sc
+        d.right = (ox + maxX) * sc
+        d.bottom = (oy + maxY) * sc
+        d.centreX = (ox + (minX + maxX) * 0.5f) * sc
+        d.centreY = (oy + (minY + maxY) * 0.5f) * sc
+        d.headX = (ox + headX) * sc
+        d.headY = (oy + headY) * sc
+        d.area = area
+        d.sumR = sr
+        d.sumG = sg
+        d.sumB = sb
+        d.minR = mr
+        d.gapRatio = gapRatio
+        d.aspect = aspect
+        d.fill = fill
+        d.height = (maxY - minY + 1) * sc
     }
 
     private fun obtain(): Detection {
         if (count >= pool.size) pool.add(Detection())
         return pool[count++]
-    }
-
-    fun clearMask() {
-        if (mask.isNotEmpty()) Arrays.fill(mask, 0)
     }
 }
