@@ -7,10 +7,6 @@ import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 
-/**
- * Passive observer. During a recording it keeps a capped set of geometric feature
- * samples, classifies each one, and at training time turns them into thresholds.
- */
 class Trainer(private val ctx: Context) {
 
     private companion object {
@@ -118,16 +114,14 @@ class Trainer(private val ctx: Context) {
         val aspects = enemies.map { it[1] }.sorted()
         val fills = enemies.map { it[2] }.sorted()
         val gaps = enemies.map { it[3] }.sorted()
-        val biases = enemies.map { it[4] }.filter { it > 0.02f }.sorted()
         val reds = enemies.map { it[5] }.sorted()
 
         val minHeight = (pick(heights, 0.10f) * 0.75f).toInt().coerceIn(8, 60)
         val minAspect = (pick(aspects, 0.10f) * 0.85f).coerceIn(1.15f, 2.6f)
         val maxFill = (pick(fills, 0.95f) * 1.15f).coerceIn(0.35f, 0.85f)
         val maxGap = (pick(gaps, 0.90f) * 1.4f).coerceIn(0.12f, 0.55f)
-        val bias = if (biases.isEmpty()) 0.60f else biases[biases.size / 2].coerceIn(0.35f, 0.85f)
         val meanRed = if (reds.isEmpty()) 160f else reds[reds.size / 2]
-        val minR = (meanRed * 0.62f).toInt().coerceIn(70, 180)
+        val minR = (meanRed * 0.78f).toInt().coerceIn(95, 190)
 
         val z = if (selfUnion.isEmpty) IntArray(0)
         else intArrayOf(
@@ -139,8 +133,8 @@ class Trainer(private val ctx: Context) {
 
         val m = AimModel(
             minR = minR,
-            redOverGreen = 38,
-            redOverBlue = 48,
+            redOverGreen = 55,
+            redOverBlue = 60,
             greenMin = 112,
             greenOverRed = 32,
             greenOverBlue = 28,
@@ -150,7 +144,7 @@ class Trainer(private val ctx: Context) {
             maxFill = maxFill,
             maxGapRatio = maxGap,
             headBand = 0.16f,
-            headBias = bias,
+            headBias = 0.60f,
             selfZone = z
         )
         Logx.d(String.format(Locale.US, "model built from %d samples", enemies.size))
