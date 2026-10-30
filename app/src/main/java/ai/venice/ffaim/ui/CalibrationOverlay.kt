@@ -56,12 +56,12 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
         })
 
         val radius = SeekBar(ctx).apply {
-            max = 360
-            progress = prefs.fovRadius - 100
+            max = 250
+            progress = prefs.fovRadius - 90
             layoutParams = LinearLayout.LayoutParams(Ui.dp(ctx, 150f), Ui.dp(ctx, 34f))
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, v: Int, fromUser: Boolean) {
-                    prefs.fovRadius = 100 + v
+                    prefs.fovRadius = 90 + v
                     board.invalidate()
                 }
                 override fun onStartTrackingTouch(sb: SeekBar?) {}
