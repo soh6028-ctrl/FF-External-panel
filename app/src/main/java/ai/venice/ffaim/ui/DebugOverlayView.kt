@@ -2,7 +2,6 @@ package ai.venice.ffaim.ui
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
 import ai.venice.ffaim.Detection
@@ -12,11 +11,12 @@ class DebugOverlayView(ctx: Context) : View(ctx) {
 
     private val box = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = Ui.dp(ctx, 1.4f).toFloat()
+        strokeWidth = Ui.dp(ctx, 1.6f).toFloat()
         color = Ui.CYAN
     }
     private val head = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
+        style = Paint.Style.STROKE
+        strokeWidth = Ui.dp(ctx, 1.4f).toFloat()
         color = Ui.AMBER
     }
 
@@ -30,14 +30,23 @@ class DebugOverlayView(ctx: Context) : View(ctx) {
     }
 
     override fun onDraw(canvas: Canvas) {
+        val arm = Ui.dp(context, 7f).toFloat()
         for (i in 0 until n) {
             if (i >= list.size) break
             val d = list[i]
-            canvas.drawRect(d.left, d.top, d.right, d.bottom, box)
-            canvas.drawCircle(d.headX, d.headY, Ui.dp(context, 3f).toFloat(), head)
+            val l = d.left
+            val t = d.top
+            val r = d.right
+            val b = d.bottom
+            canvas.drawLine(l, t, l + arm, t, box)
+            canvas.drawLine(l, t, l, t + arm, box)
+            canvas.drawLine(r, t, r - arm, t, box)
+            canvas.drawLine(r, t, r, t + arm, box)
+            canvas.drawLine(l, b, l + arm, b, box)
+            canvas.drawLine(l, b, l, b - arm, box)
+            canvas.drawLine(r, b, r - arm, b, box)
+            canvas.drawLine(r, b, r, b - arm, box)
+            canvas.drawCircle(d.headX, d.headY, Ui.dp(context, 4f).toFloat(), head)
         }
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), Paint().apply {
-            color = Color.TRANSPARENT
-        })
     }
 }
