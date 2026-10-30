@@ -80,7 +80,7 @@ class Trainer(private val ctx: Context) {
                 d.centreY >= zone[1] && d.centreY <= zone[3]
             val label = if (big && inSelf) 2 else if (d.gapRatio < 0.05f) 0 else 1
             val meanR = if (d.area > 0) (d.sumR / d.area).toFloat() else 0f
-            val headBias = ((d.headY - d.top) / maxOf(1f, d.bottom - d.top))
+            val headBias = (d.headY - d.top) / maxOf(1f, d.bottom - d.top)
             samples.add(
                 floatArrayOf(
                     d.height / 2f,
@@ -103,6 +103,12 @@ class Trainer(private val ctx: Context) {
         }
     }
 
+    private fun pick(list: List<Float>, frac: Float): Float {
+        if (list.isEmpty()) return 0f
+        val i = ((list.size - 1) * frac).toInt().coerceIn(0, list.size - 1)
+        return list[i]
+    }
+
     fun build(): AimModel? {
         val enemies = ArrayList<FloatArray>()
         for (i in samples.indices) if (labels[i] == 0) enemies.add(samples[i])
@@ -115,12 +121,10 @@ class Trainer(private val ctx: Context) {
         val biases = enemies.map { it[4] }.filter { it > 0.02f }.sorted()
         val reds = enemies.map { it[5] }.sorted()
 
-        val p = { l: List<Float>, f: Float -> l[(l.size - 1).coerceAtLeast(0) * f.toDouble() .toInt().coerceIn(0, l.size - 1)] }
-
-        val minHeight = (heights[p(heights, 0.10f)] * 0.75f).toInt().coerceIn(8, 60)
-        val minAspect = (aspects[p(aspects, 0.10f)] * 0.85f).coerceIn(1.15f, 2.6f)
-        val maxFill = (fills[p(fills, 0.95f)] * 1.15f).coerceIn(0.35f, 0.85f)
-        val maxGap = (gaps[p(gaps, 0.90f)] * 1.4f).coerceIn(0.12f, 0.55f)
+        val minHeight = (pick(heights, 0.10f) * 0.75f).toInt().coerceIn(8, 60)
+        val minAspect = (pick(aspects, 0.10f) * 0.85f).coerceIn(1.15f, 2.6f)
+        val maxFill = (pick(fills, 0.95f) * 1.15f).coerceIn(0.35f, 0.85f)
+        val maxGap = (pick(gaps, 0.90f) * 1.4f).coerceIn(0.12f, 0.55f)
         val bias = if (biases.isEmpty()) 0.60f else biases[biases.size / 2].coerceIn(0.35f, 0.85f)
         val meanRed = if (reds.isEmpty()) 160f else reds[reds.size / 2]
         val minR = (meanRed * 0.62f).toInt().coerceIn(70, 180)
