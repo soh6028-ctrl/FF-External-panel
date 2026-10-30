@@ -3,6 +3,7 @@ package ai.venice.ffaim
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -80,8 +81,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
         root.addView(action("4. Battery optimisation exemption") {
-            val i = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            startActivity(i)
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         })
         root.addView(action("START PANEL") { begin() })
         root.addView(action("STOP PANEL") { stopService(Intent(this, OverlayService::class.java)) })
@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
         val b = Button(this)
         b.text = label
         b.textSize = 12f
-        b.allCaps = false
+        b.isAllCaps = false
         b.setTextColor(Ui.TEXT)
         b.background = Ui.pill(this, Ui.CYAN_SOFT, Ui.CYAN)
         b.setOnClickListener { act() }
