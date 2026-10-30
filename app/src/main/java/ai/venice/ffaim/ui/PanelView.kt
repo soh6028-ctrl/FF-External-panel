@@ -15,7 +15,6 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
-import ai.venice.ffaim.Geometry
 import ai.venice.ffaim.Prefs
 import ai.venice.ffaim.Ui
 
@@ -121,18 +120,18 @@ class PanelView(ctx: Context, private val prefs: Prefs) : FrameLayout(ctx) {
         }
 
         fovLabel = caption("FOV radius ${prefs.fovRadius}")
-        fovBar = slider(100, 460, prefs.fovRadius) {
+        fovBar = slider(90, 340, prefs.fovRadius) {
             fovLabel.text = "FOV radius $it"
             listener?.onFov(it)
         }
 
         val offX = caption("FOV X offset ${prefs.fovOffX}")
-        val offXBar = slider(-300, 300, prefs.fovOffX + 300) {
+        slider(-300, 300, prefs.fovOffX + 300) {
             offX.text = "FOV X offset ${it - 300}"
             listener?.onFovOffset(it - 300, prefs.fovOffY)
         }
         val offY = caption("FOV Y offset ${prefs.fovOffY}")
-        val offYBar = slider(-300, 300, prefs.fovOffY + 300) {
+        slider(-300, 300, prefs.fovOffY + 300) {
             offY.text = "FOV Y offset ${it - 300}"
             listener?.onFovOffset(prefs.fovOffX, it - 300)
         }
@@ -150,12 +149,10 @@ class PanelView(ctx: Context, private val prefs: Prefs) : FrameLayout(ctx) {
         ringSwitch = toggle("FOV ring") { listener?.onRing(it) }
 
         section("Injection")
-        val accBtn = small("Accessibility") { listener?.onBackend(0) }
-        val shzBtn = small("Shizuku") { listener?.onBackend(1) }
         val injRow = LinearLayout(ctx)
         injRow.orientation = LinearLayout.HORIZONTAL
-        injRow.addView(accBtn)
-        injRow.addView(shzBtn)
+        injRow.addView(small("Accessibility") { listener?.onBackend(0) })
+        injRow.addView(small("Shizuku") { listener?.onBackend(1) })
         injRow.addView(small("Test") { listener?.onTest() })
         body.addView(injRow)
 
@@ -215,7 +212,11 @@ class PanelView(ctx: Context, private val prefs: Prefs) : FrameLayout(ctx) {
         var dy = 0f
         return OnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { dx = e.rawX; dy = e.rawY; true }
+                MotionEvent.ACTION_DOWN -> {
+                    dx = e.rawX
+                    dy = e.rawY
+                    true
+                }
                 MotionEvent.ACTION_MOVE -> {
                     listener?.onDrag(e.rawX - dx, e.rawY - dy)
                     dx = e.rawX
@@ -278,6 +279,7 @@ class PanelView(ctx: Context, private val prefs: Prefs) : FrameLayout(ctx) {
         val b = Button(context)
         b.text = label
         b.textSize = 10f
+        b.isAllCaps = false
         b.setTextColor(Ui.TEXT)
         b.background = Ui.pill(context, Ui.CYAN_SOFT, Ui.CYAN)
         b.minWidth = 0
@@ -288,10 +290,5 @@ class PanelView(ctx: Context, private val prefs: Prefs) : FrameLayout(ctx) {
         lp.rightMargin = Ui.dp(context, 6f)
         b.layoutParams = lp
         return b
-    }
-
-    fun capHeight() {
-        val max = (Geometry.screenH * 0.82f).toInt()
-        layoutParams = (layoutParams as? ViewGroup.LayoutParams)?.also { it.height = max }
     }
 }
