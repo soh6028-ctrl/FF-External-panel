@@ -24,6 +24,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import ai.venice.ffaim.ui.BubbleView
 import ai.venice.ffaim.ui.CalibrationOverlay
@@ -101,10 +102,8 @@ class OverlayService : Service(), PanelView.Listener {
 
     private fun startForegroundCompat() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
-            val ch = NotificationChannel(CH, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW)
-            nm.createNotificationChannel(ch)
-        }
+        val ch = NotificationChannel(CH, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW)
+        nm.createNotificationChannel(ch)
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -116,11 +115,7 @@ class OverlayService : Service(), PanelView.Listener {
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(NID, n)
-        }
+        startForeground(NID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
     }
 
     private fun attach(proj: MediaProjection) {
@@ -154,15 +149,21 @@ class OverlayService : Service(), PanelView.Listener {
     private fun onFrame() {
         if (visionBusy) return
         visionBusy = true
-        visionHandler?.post { processFrame() } ?: run { visionBusy = false }
+        val h = visionHandler
+        if (h == null) {
+            visionBusy = false
+            return
+        }
+        h.post { processFrame() }
     }
 
     private fun processFrame() {
         try {
-            val fov = capture?.fovBitmap ?: return
+            val cap = capture ?: return
+            val fov = cap.fovBitmap ?: return
             val now = SystemClock.uptimeMillis()
-            detector.detect(fov, capture?.fovOriginX ?: 0, capture?.fovOriginY ?: 0)
-            ammo.feed(capture?.ammoBitmap, now)
+            detector.detect(fov, cap.fovOriginX, cap.fovOriginY)
+            ammo.feed(cap.ammoBitmap, now)
 
             if (trainer.recording) trainer.sample(detector, detector.count)
 
@@ -170,12 +171,15 @@ class OverlayService : Service(), PanelView.Listener {
             engine.aimbot = prefs.aimbot && prefs.trained
             engine.headshot = prefs.headshot
             engine.headshotPct = prefs.headshotPct
-            val act = engine.update(detector.items, detector.count, cross.x.toFloat(), cross.y.toFloat(), now, prefs.fovRadius.toFloat())
+            val act = engine.update(
+                detector.items, detector.count,
+                cross.x.toFloat(), cross.y.toFloat(), now, prefs.fovRadius.toFloat()
+            )
 
             if (act != AimEngine.NONE) {
                 val dx = engine.dx
                 val dy = engine.dy
-                main.post { apply(act, dx, dy, cross) }
+                main.post { dispatchAim(act, dx, dy, cross) }
             }
 
             if (prefs.debug) dbg?.update(detector.items, detector.count)
@@ -186,23 +190,24 @@ class OverlayService : Service(), PanelView.Listener {
                 frames = 0
                 lastFpsT = now
                 main.post {
-                    hud?.fps = fps
-                    hud?.targets = detector.count
-                    hud?.lock = engine.lockOn
-                    hud?.rounds = ammo.roundsRemaining
-                    hud?.badge = prefs.trained
-                    hud?.refresh()
+                    val h = hud ?: return@post
+                    h.fps = fps
+                    h.targets = detector.count
+                    h.lock = engine.lockOn
+                    h.rounds = ammo.roundsRemaining
+                    h.badge = prefs.trained
+                    h.refresh()
                 }
             }
         } catch (t: Throwable) {
             Logx.e("vision", t)
         } finally {
-            if (capture != null) capture?.busy = false
+            capture?.busy = false
             visionBusy = false
         }
     }
 
-    private fun apply(act: Int, dx: Float, dy: Float, cross: Point) {
+    private fun dispatchAim(act: Int, dx: Float, dy: Float, cross: Point) {
         val b = backend ?: return
         when (act) {
             AimEngine.PRESS -> {
@@ -221,11 +226,11 @@ class OverlayService : Service(), PanelView.Listener {
         p.type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         p.format = PixelFormat.TRANSLUCENT
         p.gravity = Gravity.TOP or Gravity.START
-        if (touchable) {
-            p.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+        p.flags = if (touchable) {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         } else {
-            p.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
@@ -280,7 +285,6 @@ class OverlayService : Service(), PanelView.Listener {
         if (panel != null) return
         val v = PanelView(this, prefs)
         v.listener = this
-        v.capHeight()
         val p = overlayParams(true)
         p.width = Ui.dp(this, 250f)
         p.height = (Geometry.screenH * 0.82f).toInt()
@@ -348,7 +352,10 @@ class OverlayService : Service(), PanelView.Listener {
 
     override fun onAimbot(b: Boolean) {
         prefs.aimbot = b
-        if (!b) { engine.releaseNow(); backend?.release() }
+        if (!b) {
+            engine.releaseNow()
+            backend?.release()
+        }
     }
 
     override fun onHeadshot(b: Boolean) {
@@ -385,7 +392,9 @@ class OverlayService : Service(), PanelView.Listener {
 
     override fun onDebug(b: Boolean) {
         prefs.debug = b
-        if (b) addDebug() else {
+        if (b) {
+            addDebug()
+        } else {
             val v = dbg ?: return
             dbg = null
             try { wm.removeView(v) } catch (t: Throwable) { }
@@ -394,7 +403,9 @@ class OverlayService : Service(), PanelView.Listener {
 
     override fun onRing(b: Boolean) {
         prefs.ring = b
-        if (b) addRing() else {
+        if (b) {
+            addRing()
+        } else {
             val v = ring ?: return
             ring = null
             try { wm.removeView(v) } catch (t: Throwable) { }
@@ -435,16 +446,17 @@ class OverlayService : Service(), PanelView.Listener {
 
     private fun train() {
         panel?.setProgress("Learning 1/3")
-        main.postDelayed {
+        main.postDelayed({
             panel?.setProgress("Learning 2/3")
-            main.postDelayed {
+            main.postDelayed({
                 panel?.setProgress("Learning 3/3")
-                main.postDelayed {
+                main.postDelayed({
                     panel?.setProgress("Building model\u2026")
-                    Handler(visionThread!!.looper).post { build() }
-                }
-            }
-        }
+                    val t = visionThread
+                    if (t == null) build() else Handler(t.looper).post { build() }
+                }, 500L)
+            }, 400L)
+        }, 400L)
     }
 
     private fun build() {
@@ -461,25 +473,25 @@ class OverlayService : Service(), PanelView.Listener {
             panel?.refresh()
             panel?.setProgress("Understood \u2014 enemies, teammates, my character, and head positions are all clear.")
             Toast.makeText(this, "TRAINED SUCCESSFUL \u2014 all toggles unlocked", Toast.LENGTH_LONG).show()
-            banner("TRAINED SUCCESSFUL", "All toggles unlocked.")
+            banner()
         }
     }
 
-    private fun banner(title: String, sub: String) {
+    private fun banner() {
         val box = FrameLayout(this)
         box.background = Ui.panelBackground(this)
-        val tv = android.widget.TextView(this)
-        tv.text = title
+        val lay = FrameLayout(this)
+        val tv = TextView(this)
+        tv.text = "TRAINED SUCCESSFUL"
         tv.setTextColor(Ui.OK)
         tv.textSize = 18f
         tv.gravity = Gravity.CENTER
         tv.setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
-        val tv2 = android.widget.TextView(this)
-        tv2.text = sub
+        val tv2 = TextView(this)
+        tv2.text = "All toggles unlocked."
         tv2.setTextColor(Ui.TEXT_DIM)
         tv2.textSize = 11f
         tv2.gravity = Gravity.CENTER
-        val lay = FrameLayout(this)
         lay.addView(tv, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         val lp2 = FrameLayout.LayoutParams(-1, -2, Gravity.CENTER)
         lp2.topMargin = Ui.dp(this, 26f)
@@ -491,21 +503,21 @@ class OverlayService : Service(), PanelView.Listener {
         p.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         p.y = Ui.dp(this, 40f)
         try { wm.addView(box, p) } catch (t: Throwable) { return }
-        main.postDelayed {
+        main.postDelayed({
             try { wm.removeView(box) } catch (t: Throwable) { }
-        }
+        }, 2800L)
     }
 
     override fun onTest() {
         val b = backend ?: return
         val cross = Geometry.crosshair()
         b.press(cross.x.toFloat(), cross.y.toFloat())
-        main.postDelayed { b.dragBy(90f, 0f) }
-        main.postDelayed { b.dragBy(-45f, 30f) }
-        main.postDelayed {
+        main.postDelayed({ b.dragBy(90f, 0f) }, 60L)
+        main.postDelayed({ b.dragBy(-45f, 30f) }, 160L)
+        main.postDelayed({
             b.release()
             Toast.makeText(this, "Test swipe sent \u2014 did the camera move?", Toast.LENGTH_SHORT).show()
-        }
+        }, 300L)
     }
 
     override fun onCalibrate() = openCalibration()
@@ -538,32 +550,26 @@ class OverlayService : Service(), PanelView.Listener {
 
     private fun registerDisplayListener() {
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val l = Geometry.displayListener {
-            main.post { onDisplayChanged() }
-        }
+        val l = Geometry.displayListener { main.post { onDisplayChanged() } }
         displayListener = l
         try { dm.registerDisplayListener(l, main) } catch (t: Throwable) { }
     }
 
     private fun onDisplayChanged() {
         Geometry.refresh(this)
-        (ring?.layoutParams as? WindowManager.LayoutParams)?.let {
-            it.width = Geometry.screenW
-            it.height = Geometry.screenH
-            try { wm.updateViewLayout(ring, it) } catch (e: Throwable) { }
-        }
-        (dbg?.layoutParams as? WindowManager.LayoutParams)?.let {
-            it.width = Geometry.screenW
-            it.height = Geometry.screenH
-            try { wm.updateViewLayout(dbg, it) } catch (e: Throwable) { }
-        }
-        (cal?.layoutParams as? WindowManager.LayoutParams)?.let {
-            it.width = Geometry.screenW
-            it.height = Geometry.screenH
-            try { wm.updateViewLayout(cal, it) } catch (e: Throwable) { }
-        }
+        resize(ring)
+        resize(dbg)
+        resize(cal)
         ring?.invalidate()
         Logx.d("display reconfigured ${Geometry.screenW}x${Geometry.screenH}")
+    }
+
+    private fun resize(v: View?) {
+        if (v == null) return
+        val p = v.layoutParams as? WindowManager.LayoutParams ?: return
+        p.width = Geometry.screenW
+        p.height = Geometry.screenH
+        try { wm.updateViewLayout(v, p) } catch (t: Throwable) { }
     }
 
     private fun shutdown() {
@@ -573,13 +579,16 @@ class OverlayService : Service(), PanelView.Listener {
         try { projection?.stop() } catch (t: Throwable) { }
         projection = null
         visionHandler?.looper?.quitSafely()
+        visionHandler = null
         visionThread = null
         displayListener?.let {
             try {
                 (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(it)
             } catch (e: Throwable) { }
         }
-        for (v in listOf<View?>(cal, panel, bubble, ring, hud, dbg)) {
+        displayListener = null
+        val views = listOf<View?>(cal, panel, bubble, ring, hud, dbg)
+        for (v in views) {
             if (v != null) try { wm.removeView(v) } catch (t: Throwable) { }
         }
         cal = null
