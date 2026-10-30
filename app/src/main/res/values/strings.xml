@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FF AIM</string>
+    <string name="acc_label">FF AIM Injector</string>
+    <string name="acc_desc">Injects a single synthetic camera pointer so the aim panel can steer your view. Does not read game memory.</string>
+    <string name="notif_channel">Aim panel</string>
+    <string name="notif_title">FF AIM running</string>
+    <string name="notif_text">Vision + injection active</string>
+</resources>
