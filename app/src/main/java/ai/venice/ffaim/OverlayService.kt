@@ -39,6 +39,7 @@ class OverlayService : Service(), PanelView.Listener {
         @Volatile var running = false
         private const val CH = "ffaim"
         private const val NID = 4201
+        private const val TICK = 8L
     }
 
     private lateinit var wm: WindowManager
@@ -66,7 +67,18 @@ class OverlayService : Service(), PanelView.Listener {
     private var frames = 0
     private var fps = 0
 
+    private var lastLock = false
+    private var lastOn = false
+
     private var displayListener: DisplayManager.DisplayListener? = null
+
+    private val ticker = object : Runnable {
+        override fun run() {
+            if (!running) return
+            aimTick()
+            main.postDelayed(this, TICK)
+        }
+    }
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -132,6 +144,7 @@ class OverlayService : Service(), PanelView.Listener {
         capture = cap
         backend = if (prefs.backend == 1) ShizukuBackend() else AccessibilityBackend()
         refreshModel()
+        main.post(ticker)
     }
 
     private fun refreshModel() {
@@ -162,26 +175,12 @@ class OverlayService : Service(), PanelView.Listener {
             val cap = capture ?: return
             val fov = cap.fovBitmap ?: return
             val now = SystemClock.uptimeMillis()
-            detector.detect(fov, cap.fovOriginX, cap.fovOriginY)
-            ammo.feed(cap.ammoBitmap, now)
-
-            if (trainer.recording) trainer.sample(detector, detector.count)
-
             val cross = Geometry.crosshair()
-            engine.aimbot = prefs.aimbot && prefs.trained
-            engine.headshot = prefs.headshot
-            engine.headshotPct = prefs.headshotPct
-            val act = engine.update(
-                detector.items, detector.count,
-                cross.x.toFloat(), cross.y.toFloat(), now, prefs.fovRadius.toFloat()
-            )
-
-            if (act != AimEngine.NONE) {
-                val dx = engine.dx
-                val dy = engine.dy
-                main.post { dispatchAim(act, dx, dy, cross) }
-            }
-
+            detector.detect(fov, cap.fovOriginX, cap.fovOriginY, cap.invScale,
+                cross.x.toFloat(), cross.y.toFloat())
+            ammo.feed(cap.ammoBitmap, now)
+            if (trainer.recording) trainer.sample(detector, detector.count)
+            engine.setDetections(detector.items, detector.count, detector.reticleRed)
             if (prefs.debug) dbg?.update(detector.items, detector.count)
 
             frames++
@@ -193,7 +192,6 @@ class OverlayService : Service(), PanelView.Listener {
                     val h = hud ?: return@post
                     h.fps = fps
                     h.targets = detector.count
-                    h.lock = engine.lockOn
                     h.rounds = ammo.roundsRemaining
                     h.badge = prefs.trained
                     h.refresh()
@@ -204,6 +202,26 @@ class OverlayService : Service(), PanelView.Listener {
         } finally {
             capture?.busy = false
             visionBusy = false
+        }
+    }
+
+    private fun aimTick() {
+        val cross = Geometry.crosshair()
+        engine.aimbot = prefs.aimbot && prefs.trained
+        engine.headshot = prefs.headshot
+        engine.headshotPct = prefs.headshotPct
+        val act = engine.tick(
+            SystemClock.uptimeMillis(),
+            cross.x.toFloat(), cross.y.toFloat(), prefs.fovRadius.toFloat()
+        )
+        if (act != AimEngine.NONE) dispatchAim(act, engine.dx, engine.dy, cross)
+
+        if (engine.lockOn != lastLock || engine.onTarget != lastOn) {
+            lastLock = engine.lockOn
+            lastOn = engine.onTarget
+            hud?.lock = lastLock
+            hud?.onTarget = lastOn
+            hud?.refresh()
         }
     }
 
@@ -218,8 +236,6 @@ class OverlayService : Service(), PanelView.Listener {
             AimEngine.RELEASE -> b.release()
         }
     }
-
-    // ---- overlays -------------------------------------------------------
 
     private fun overlayParams(touchable: Boolean): WindowManager.LayoutParams {
         val p = WindowManager.LayoutParams()
@@ -273,8 +289,8 @@ class OverlayService : Service(), PanelView.Listener {
         if (hud != null) return
         val v = HudView(this)
         val p = overlayParams(false)
-        p.width = Ui.dp(this, 96f)
-        p.height = Ui.dp(this, 92f)
+        p.width = Ui.dp(this, 104f)
+        p.height = Ui.dp(this, 108f)
         p.x = Ui.dp(this, 10f)
         p.y = Ui.dp(this, 8f)
         hud = v
@@ -347,8 +363,6 @@ class OverlayService : Service(), PanelView.Listener {
         cal = v
         try { wm.addView(v, p) } catch (t: Throwable) { Logx.e("cal", t) }
     }
-
-    // ---- panel callbacks ------------------------------------------------
 
     override fun onAimbot(b: Boolean) {
         prefs.aimbot = b
@@ -546,8 +560,6 @@ class OverlayService : Service(), PanelView.Listener {
         try { wm.updateViewLayout(v, p) } catch (t: Throwable) { }
     }
 
-    // ---- lifecycle ------------------------------------------------------
-
     private fun registerDisplayListener() {
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val l = Geometry.displayListener { main.post { onDisplayChanged() } }
@@ -561,7 +573,6 @@ class OverlayService : Service(), PanelView.Listener {
         resize(dbg)
         resize(cal)
         ring?.invalidate()
-        Logx.d("display reconfigured ${Geometry.screenW}x${Geometry.screenH}")
     }
 
     private fun resize(v: View?) {
@@ -573,6 +584,8 @@ class OverlayService : Service(), PanelView.Listener {
     }
 
     private fun shutdown() {
+        running = false
+        main.removeCallbacks(ticker)
         backend?.release()
         capture?.stop()
         capture = null
@@ -597,13 +610,13 @@ class OverlayService : Service(), PanelView.Listener {
         ring = null
         hud = null
         dbg = null
-        running = false
         stopForeground(true)
         stopSelf()
     }
 
     override fun onDestroy() {
         running = false
+        main.removeCallbacks(ticker)
         try { backend?.release() } catch (t: Throwable) { }
         super.onDestroy()
     }
