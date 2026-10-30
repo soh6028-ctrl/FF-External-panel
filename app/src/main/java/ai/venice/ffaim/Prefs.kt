@@ -17,8 +17,8 @@ class Prefs(ctx: Context) {
     @Volatile var headshotPct: Int = sp.getInt("headshot_pct", 100).coerceIn(10, 100)
         set(v) { val c = v.coerceIn(10, 100); field = c; sp.edit().putInt("headshot_pct", c).apply() }
 
-    @Volatile var fovRadius: Int = sp.getInt("fov_r", 240).coerceIn(100, 460)
-        set(v) { val c = v.coerceIn(100, 460); field = c; sp.edit().putInt("fov_r", c).apply() }
+    @Volatile var fovRadius: Int = sp.getInt("fov_r", 180).coerceIn(90, 340)
+        set(v) { val c = v.coerceIn(90, 340); field = c; sp.edit().putInt("fov_r", c).apply() }
 
     @Volatile var fovOffX: Int = sp.getInt("fov_x", 0).coerceIn(-300, 300)
         set(v) { field = v; sp.edit().putInt("fov_x", v).apply() }
@@ -71,7 +71,7 @@ class Prefs(ctx: Context) {
     fun defaultSelfZone(): Rect {
         val w = Geometry.screenW
         val h = Geometry.screenH
-        return Rect((w * 0.30f).toInt(), (h * 0.62f).toInt(), (w * 0.72f).toInt(), h)
+        return Rect((w * 0.34f).toInt(), (h * 0.36f).toInt(), (w * 0.58f).toInt(), (h * 0.62f).toInt())
     }
 
     fun resetSelfZone() {
@@ -104,7 +104,7 @@ class Prefs(ctx: Context) {
     }
 
     fun resetFov() {
-        fovRadius = 240
+        fovRadius = 180
         fovOffX = 0
         fovOffY = 0
     }
