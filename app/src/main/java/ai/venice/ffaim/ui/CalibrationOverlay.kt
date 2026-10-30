@@ -13,7 +13,6 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
-import android.widget.TextView
 import ai.venice.ffaim.Geometry
 import ai.venice.ffaim.Prefs
 import ai.venice.ffaim.Ui
@@ -86,6 +85,7 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
         val b = Button(context)
         b.text = text
         b.textSize = 11f
+        b.isAllCaps = false
         b.setTextColor(Ui.TEXT)
         b.background = Ui.pill(context, Ui.CYAN_SOFT, Ui.CYAN)
         b.minWidth = 0
@@ -143,8 +143,7 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
         fun commit() {
             val cx = Geometry.screenW / 2
             val cy = Geometry.screenH / 2
-            val r = (fovRect.width() / 2)
-            prefs.fovRadius = r
+            prefs.fovRadius = fovRect.width() / 2
             prefs.fovOffX = fovRect.centerX() - cx
             prefs.fovOffY = fovRect.centerY() - cy
             prefs.setAmmoBox(ammo)
@@ -152,12 +151,15 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
         }
 
         override fun onDraw(canvas: Canvas) {
-            canvas.drawCircle(fovRect.centerX().toFloat(), fovRect.centerY().toFloat(), fovRect.width() / 2f, ringPaint)
+            val r = fovRect.width() / 2f
+            val cx = fovRect.centerX().toFloat()
+            val cy = fovRect.centerY().toFloat()
+            canvas.drawCircle(cx, cy, r, ringPaint)
             canvas.drawRect(ammo, ammoPaint)
             canvas.drawRect(self, selfPaint)
-            canvas.drawText("FOV", fovRect.centerX() - Ui.dp(context, 12f), fovRect.centerY().toFloat() - fovRect.width() / 2f - Ui.dp(context, 8f), text)
-            canvas.drawText("AMMO", ammo.left.toFloat(), ammo.top - Ui.dp(context, 6f), text)
-            canvas.drawText("SELF", self.left.toFloat(), self.top - Ui.dp(context, 6f), text)
+            canvas.drawText("FOV", cx - Ui.dp(context, 12f), cy - r - Ui.dp(context, 8f), text)
+            canvas.drawText("AMMO", ammo.left.toFloat(), (ammo.top - Ui.dp(context, 6f)).toFloat(), text)
+            canvas.drawText("SELF", self.left.toFloat(), (self.top - Ui.dp(context, 6f)).toFloat(), text)
         }
 
         @SuppressLint("ClickableViewAccessibility")
@@ -168,7 +170,10 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
                     downY = e.y
                     handle = when (mode) {
                         MODE_FOV -> if (fovRect.contains(e.x.toInt(), e.y.toInt()) ||
-                            Math.hypot((e.x - fovRect.centerX()).toDouble(), (e.y - fovRect.centerY()).toDouble()) < fovRect.width() / 2 + 60
+                            Math.hypot(
+                                (e.x - fovRect.centerX()).toDouble(),
+                                (e.y - fovRect.centerY()).toDouble()
+                            ) < fovRect.width() / 2 + 60
                         ) 0 else -1
                         MODE_AMMO -> if (ammo.contains(e.x.toInt(), e.y.toInt())) 1 else -1
                         else -> if (self.contains(e.x.toInt(), e.y.toInt())) 2 else -1
@@ -188,7 +193,10 @@ class CalibrationOverlay(ctx: Context, private val prefs: Prefs) : FrameLayout(c
                     invalidate()
                     return true
                 }
-                MotionEvent.ACTION_UP -> { handle = -1; return true }
+                MotionEvent.ACTION_UP -> {
+                    handle = -1
+                    return true
+                }
             }
             return super.onTouchEvent(e)
         }
