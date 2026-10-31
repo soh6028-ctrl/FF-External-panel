@@ -14,10 +14,22 @@ import android.os.HandlerThread
 import android.os.Process
 import android.view.Surface
 
+/**
+ * 2/3-resolution capture. A 1 px outline at 1080p survives this downscale;
+ * at half resolution it dissolves into the neighbouring colour and the mask
+ * shatters.
+ */
 class CaptureEngine(private val ctx: Context) {
+
+    private companion object {
+        const val S = 2f / 3f
+        const val INV = 1.5f
+    }
 
     @Volatile var busy = false
     var onFrame: (() -> Unit)? = null
+
+    val invScale: Float get() = INV
 
     private var projection: MediaProjection? = null
     private var vd: VirtualDisplay? = null
@@ -28,8 +40,8 @@ class CaptureEngine(private val ctx: Context) {
 
     private var fovBmp: Bitmap? = null
     private var ammoBmp: Bitmap? = null
-    private var halfW = 0
-    private var halfH = 0
+    private var bufW = 0
+    private var bufH = 0
 
     var fovOriginX = 0
         private set
@@ -42,18 +54,18 @@ class CaptureEngine(private val ctx: Context) {
     fun start(proj: MediaProjection, prefs: Prefs) {
         projection = proj
         Geometry.refresh(ctx)
-        halfW = Geometry.screenW / 2
-        halfH = Geometry.screenH / 2
-        if (halfW < 64 || halfH < 64) return
+        bufW = (Geometry.screenW * S).toInt()
+        bufH = (Geometry.screenH * S).toInt()
+        if (bufW < 64 || bufH < 64) return
         thread.start()
         handler = Handler(thread.looper)
-        scratch = IntArray(halfW)
-        reader = ImageReader.newInstance(halfW, halfH, PixelFormat.RGBA_8888, 2)
+        scratch = IntArray(bufW)
+        reader = ImageReader.newInstance(bufW, bufH, PixelFormat.RGBA_8888, 2)
         reader?.setOnImageAvailableListener({ r -> onImage(r, prefs) }, handler)
         val surf: Surface = reader?.surface ?: return
         vd = projection?.createVirtualDisplay(
             "ffaim",
-            halfW, halfH,
+            bufW, bufH,
             ctx.resources.displayMetrics.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             surf, null, handler
@@ -65,10 +77,13 @@ class CaptureEngine(private val ctx: Context) {
         try {
             if (busy) return
             val p = img.planes[0]
-            val cx = Geometry.screenW / 2 + prefs.fovOffX
-            val cy = Geometry.screenH / 2 + prefs.fovOffY
-            val halfR = prefs.fovRadius / 2
-            val fov = Rect(cx / 2 - halfR, cy / 2 - halfR, cx / 2 + halfR, cy / 2 + halfR)
+            val cx = (Geometry.screenW / 2 + prefs.fovOffX) * S
+            val cy = (Geometry.screenH / 2 + prefs.fovOffY) * S
+            val halfR = prefs.fovRadius * S
+            val fov = Rect(
+                (cx - halfR).toInt(), (cy - halfR).toInt(),
+                (cx + halfR).toInt(), (cy + halfR).toInt()
+            )
             clamp(fov)
             if (fov.width() < 32 || fov.height() < 32) return
             val fb = ensure(fov.width(), fov.height(), true) ?: return
@@ -77,7 +92,10 @@ class CaptureEngine(private val ctx: Context) {
             copy(p, fov, fb)
 
             val a = prefs.ammoBox()
-            val ar = Rect(a.left / 2, a.top / 2, a.right / 2, a.bottom / 2)
+            val ar = Rect(
+                (a.left * S).toInt(), (a.top * S).toInt(),
+                (a.right * S).toInt(), (a.bottom * S).toInt()
+            )
             clamp(ar)
             if (ar.width() >= 12 && ar.height() >= 12) {
                 val ab = ensure(ar.width(), ar.height(), false) ?: return
@@ -94,10 +112,10 @@ class CaptureEngine(private val ctx: Context) {
     private fun clamp(r: Rect) {
         if (r.left < 0) r.left = 0
         if (r.top < 0) r.top = 0
-        if (r.right > halfW) r.right = halfW
-        if (r.bottom > halfH) r.bottom = halfH
-        if (r.right <= r.left) r.right = (r.left + 1).coerceAtMost(halfW)
-        if (r.bottom <= r.top) r.bottom = (r.top + 1).coerceAtMost(halfH)
+        if (r.right > bufW) r.right = bufW
+        if (r.bottom > bufH) r.bottom = bufH
+        if (r.right <= r.left) r.right = (r.left + 1).coerceAtMost(bufW)
+        if (r.bottom <= r.top) r.bottom = (r.top + 1).coerceAtMost(bufH)
     }
 
     private fun ensure(w: Int, h: Int, isFov: Boolean): Bitmap? {
